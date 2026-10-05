@@ -1,0 +1,13 @@
+{
+  "name": "desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "学生课后练习辅助系统 - 桌面壳",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^31.0.0"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "backend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "学生课后练习辅助系统 - 后端 API",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "multer": "^2.4.0"
+  }
+}
