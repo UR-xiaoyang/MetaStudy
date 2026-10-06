@@ -1,6 +1,7 @@
 <script setup>
 import { computed } from 'vue';
 import { marked } from 'marked';
+import DOMPurify from 'dompurify';
 
 const props = defineProps({
   source: { type: String, default: '' }
@@ -11,9 +12,14 @@ marked.setOptions({ gfm: true, breaks: true });
 const html = computed(() => {
   if (!props.source) return '';
   try {
-    return marked.parse(props.source);
+    const rawHtml = marked.parse(props.source);
+    return DOMPurify.sanitize(rawHtml, {
+      ALLOWED_TAGS: ['p', 'br', 'strong', 'em', 'u', 's', 'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'code', 'pre', 'hr', 'a'],
+      ALLOWED_ATTR: ['href'],
+      ALLOW_DATA_ATTR: false
+    });
   } catch {
-    return props.source;
+    return DOMPurify.sanitize(props.source);
   }
 });
 </script>

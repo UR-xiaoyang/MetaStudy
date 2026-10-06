@@ -10,6 +10,12 @@ function isMember(userId, classId) {
   return !!db.prepare('SELECT id FROM class_members WHERE class_id = ? AND user_id = ?').get(classId, userId);
 }
 
+function isTeacherMember(userId, classId) {
+  return !!db
+    .prepare("SELECT id FROM class_members WHERE class_id = ? AND user_id = ? AND role = 'teacher'")
+    .get(classId, userId);
+}
+
 router.get('/class/:classId', (req, res) => {
   const classId = Number(req.params.classId);
   if (!isMember(req.user.id, classId)) {
@@ -50,6 +56,9 @@ router.post('/', (req, res) => {
   if (!isMember(req.user.id, Number(class_id))) {
     return res.status(403).json({ error: '无权访问该班级' });
   }
+  if (!isTeacherMember(req.user.id, Number(class_id))) {
+    return res.status(403).json({ error: '只有班级老师可以创建课程' });
+  }
   const info = db
     .prepare('INSERT INTO courses (class_id, title, subject, created_by) VALUES (?, ?, ?, ?)')
     .run(Number(class_id), title.trim(), subject ? subject.trim() : null, req.user.id);
@@ -87,11 +96,11 @@ router.get('/:id', (req, res) => {
     .prepare(
       `SELECT w.*, u.username AS created_by_name, q.question AS source_question
        FROM wrong_questions w
-       LEFT JOIN users u ON u.id = w.created_by
-       LEFT JOIN questions q ON q.id = w.question_id
-       WHERE w.course_id = ? ORDER BY w.created_at DESC`
+        LEFT JOIN users u ON u.id = w.created_by
+        LEFT JOIN questions q ON q.id = w.question_id
+        WHERE w.course_id = ? AND w.created_by = ? ORDER BY w.created_at DESC`
     )
-    .all(id);
+    .all(id, req.user.id);
   res.json({ ...course, recordings, images, questions, messages, note, wrongs });
 });
 
@@ -99,11 +108,9 @@ router.get('/:id/stats', (req, res) => {
   const id = Number(req.params.id);
   const course = db.prepare('SELECT * FROM courses WHERE id = ?').get(id);
   if (!course) return res.status(404).json({ error: '课程不存在' });
-  if (!isMember(req.user.id, course.class_id)) {
-    return res.status(403).json({ error: '无权访问该课程' });
+  if (!isTeacherMember(req.user.id, course.class_id)) {
+    return res.status(403).json({ error: '只有班级老师可以查看学习数据' });
   }
-
-  // 学生列表（该课程所属班级的学生成员）
   const students = db
     .prepare(
       `SELECT u.id, u.username, cm.role
@@ -165,8 +172,8 @@ router.delete('/:id', (req, res) => {
   const id = Number(req.params.id);
   const course = db.prepare('SELECT * FROM courses WHERE id = ?').get(id);
   if (!course) return res.status(404).json({ error: '课程不存在' });
-  if (req.user.role !== 'teacher') {
-    return res.status(403).json({ error: '只有老师可以删除课程' });
+  if (!isTeacherMember(req.user.id, course.class_id)) {
+    return res.status(403).json({ error: '只有班级老师可以删除课程' });
   }
   db.prepare('DELETE FROM courses WHERE id = ?').run(id);
   res.json({ ok: true });

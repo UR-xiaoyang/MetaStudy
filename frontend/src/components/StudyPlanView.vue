@@ -1,6 +1,7 @@
 <script setup>
 import { computed } from 'vue';
 import { marked } from 'marked';
+import DOMPurify from 'dompurify';
 
 const props = defineProps({
   plan: Object,
@@ -60,9 +61,14 @@ function splitMarkdown(md) {
 function parseWithMarkdown(fullMd) {
   // 渲染为 html 供说明性段落使用；步骤单独展示
   try {
-    return marked.parse(fullMd);
+    const rawHtml = marked.parse(fullMd);
+    return DOMPurify.sanitize(rawHtml, {
+      ALLOWED_TAGS: ['p', 'br', 'strong', 'em', 'u', 's', 'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'blockquote', 'code', 'pre'],
+      ALLOWED_ATTR: [],
+      ALLOW_DATA_ATTR: false
+    });
   } catch {
-    return fullMd;
+    return DOMPurify.sanitize(fullMd);
   }
 }
 

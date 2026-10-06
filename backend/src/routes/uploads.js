@@ -22,7 +22,15 @@ const audioUpload = multer({
     destination: join(storageDir, 'audios'),
     filename: (req, file, cb) => cb(null, randName(file.originalname))
   }),
-  limits: { fileSize: 200 * 1024 * 1024 }
+  limits: { fileSize: 200 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const allowed = ['audio/webm', 'audio/mpeg', 'audio/mp4', 'audio/wav', 'audio/ogg'];
+    if (allowed.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('只允许上传音频文件'));
+    }
+  }
 });
 
 const imageUpload = multer({
@@ -30,7 +38,15 @@ const imageUpload = multer({
     destination: join(storageDir, 'images'),
     filename: (req, file, cb) => cb(null, randName(file.originalname))
   }),
-  limits: { fileSize: 20 * 1024 * 1024 }
+  limits: { fileSize: 20 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const allowed = ['image/jpeg', 'image/png', 'image/webp'];
+    if (allowed.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('只允许上传 JPEG、PNG 或 WebP 图片'));
+    }
+  }
 });
 
 function checkCourse(req, res, next) {

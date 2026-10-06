@@ -27,6 +27,11 @@ router.post('/generate/:courseId', (req, res) => {
 
 router.get('/:courseId', (req, res) => {
   const courseId = Number(req.params.courseId);
+  const course = db.prepare('SELECT * FROM courses WHERE id = ?').get(courseId);
+  if (!course) return res.status(404).json({ error: '课程不存在' });
+  if (!isMember(req.user.id, course.class_id)) {
+    return res.status(403).json({ error: '无权访问该课程' });
+  }
   const questions = db
     .prepare('SELECT * FROM questions WHERE course_id = ? ORDER BY id')
     .all(courseId);

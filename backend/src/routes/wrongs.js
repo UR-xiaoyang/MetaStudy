@@ -21,8 +21,11 @@ function checkCourse(req, res, next) {
 
 router.get('/class-report/:classId', (req, res) => {
   const classId = Number(req.params.classId);
-  if (!isMember(req.user.id, classId)) {
-    return res.status(403).json({ error: '无权访问该班级' });
+  const isTeacher = !!db
+    .prepare("SELECT id FROM class_members WHERE class_id = ? AND user_id = ? AND role = 'teacher'")
+    .get(classId, req.user.id);
+  if (!isTeacher) {
+    return res.status(403).json({ error: '只有班级老师可以查看错题汇总' });
   }
   const rows = db
     .prepare(
@@ -46,10 +49,10 @@ router.get('/:courseId', checkCourse, (req, res) => {
        FROM wrong_questions w
        LEFT JOIN users u ON u.id = w.created_by
        LEFT JOIN questions q ON q.id = w.question_id
-       WHERE w.course_id = ?
+       WHERE w.course_id = ? AND w.created_by = ?
        ORDER BY w.created_at DESC`
     )
-    .all(req.course.id);
+    .all(req.course.id, req.user.id);
   res.json(rows);
 });
 
