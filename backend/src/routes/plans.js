@@ -1,23 +1,10 @@
 import { Router } from 'express';
 import { db } from '../db.js';
 import { authMiddleware } from '../auth.js';
+import { ownCourseMiddleware } from '../access.js';
 
 const router = Router();
 router.use(authMiddleware);
-
-function isMember(userId, classId) {
-  return !!db.prepare('SELECT id FROM class_members WHERE class_id = ? AND user_id = ?').get(classId, userId);
-}
-
-function checkCourse(req, res, next) {
-  const course = db.prepare('SELECT * FROM courses WHERE id = ?').get(Number(req.params.courseId));
-  if (!course) return res.status(404).json({ error: '课程不存在' });
-  if (!isMember(req.user.id, course.class_id)) {
-    return res.status(403).json({ error: '无权访问该课程' });
-  }
-  req.course = course;
-  next();
-}
 
 const STOPWORDS = /(的|了|和|是|在|与|及|或|都|也|就|很|而|因为|所以|但是|以及|可以|我们|你们|他们|这个|那个|关于|什么|如何|为什么|进行|具有|包括|以及)/g;
 
@@ -112,7 +99,7 @@ function emptyState(preview, review, practice) {
   });
 }
 
-router.get('/:courseId', checkCourse, (req, res) => {
+router.get('/:courseId', ownCourseMiddleware, (req, res) => {
   let plan = db
     .prepare('SELECT * FROM study_plans WHERE course_id = ? AND user_id = ?')
     .get(req.course.id, req.user.id);
@@ -124,7 +111,7 @@ router.get('/:courseId', checkCourse, (req, res) => {
   res.json(plan || null);
 });
 
-router.put('/state/:courseId', checkCourse, (req, res) => {
+router.put('/state/:courseId', ownCourseMiddleware, (req, res) => {
   const { state } = req.body || {};
   const existing = db
     .prepare('SELECT * FROM study_plans WHERE course_id = ? AND user_id = ?')
@@ -144,7 +131,7 @@ router.put('/state/:courseId', checkCourse, (req, res) => {
   res.json(saved);
 });
 
-router.post('/generate/:courseId', checkCourse, (req, res) => {
+router.post('/generate/:courseId', ownCourseMiddleware, (req, res) => {
   try {
     const plan = buildPlan(req.course);
     const state = emptyState(plan.preview, plan.review, plan.practice);

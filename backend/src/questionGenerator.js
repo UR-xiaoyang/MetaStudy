@@ -56,7 +56,7 @@ function generateEssay(course, keywords) {
     type: 'essay',
     question: `请结合本节课「${course.title}」的内容（关键词：${target}），用自己的话总结本节课的核心知识点，并举例说明。`,
     options: null,
-    answer: `本题为开放性题目，参考答案方向：围绕「${course.title}」及关键词「${target}」进行总结与举例。`
+    answer: target
   };
 }
 
@@ -76,11 +76,11 @@ export function generateQuestionsForCourse(courseId) {
     .all(courseId)
     .map((r) => r.filename);
   const recordings = db
-    .prepare('SELECT filename FROM recordings WHERE course_id = ?')
-    .all(courseId)
-    .map((r) => r.filename);
+    .prepare('SELECT filename, transcript FROM recordings WHERE course_id = ?')
+    .all(courseId);
+  const transcripts = recordings.map((r) => r.transcript).filter(Boolean);
 
-  const keywords = extractKeywords(course.title, course.subject, ...images, ...recordings);
+  const keywords = extractKeywords(course.title, course.subject, ...images, ...recordings.map((r) => r.filename), ...transcripts);
   if (!keywords.length) keywords.push(course.title);
 
   const questions = [

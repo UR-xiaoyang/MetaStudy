@@ -1,6 +1,6 @@
 <script setup>
 import { ref, onMounted, onBeforeUnmount } from 'vue';
-import { courseApi, uploadApi, questionApi, messageApi, noteApi, wrongApi, planApi, studyLogApi } from '../api/client.js';
+import { courseApi, uploadApi, questionApi, quizApi, messageApi, noteApi, wrongApi, planApi, studyLogApi, authorizedFileUrl } from '../api/client.js';
 import MarkdownView from '../components/MarkdownView.vue';
 import StudyPlanView from '../components/StudyPlanView.vue';
 
@@ -47,8 +47,8 @@ async function stopStudy() {
   studySeconds.value = 0;
 }
 
-function isTeacher() {
-  return props.user.role === 'teacher';
+  function isTeacher() {
+  return false;
 }
 
 async function load() {
@@ -307,6 +307,11 @@ async function saveNote() {
 const generating = ref(false);
 const showAnswers = ref(false);
 const selectedAnswers = ref({});
+const textAnswers = ref({});
+const submittingQuiz = ref(false);
+const quizResult = ref(null);
+const explanation = ref(null);
+const explainingQuestionId = ref(null);
 
 async function generate() {
   generating.value = true;
@@ -335,12 +340,38 @@ async function clearQuestions() {
 
 function selectAnswer(q, optionIndex) {
   selectedAnswers.value[q.id] = optionIndex;
-  const chosen = String.fromCharCode(65 + optionIndex);
-  // 实时判断并在答错时提示可加入错题本
-  if (chosen !== q.answer) {
-    alert(`回答错误，正确答案是 ${q.answer}。可点击「加入错题本」复习。`);
-  } else {
-    alert('回答正确！');
+}
+
+function answerFor(q) {
+  if (q.type === 'choice') {
+    return selectedAnswers.value[q.id] == null ? '' : String.fromCharCode(65 + selectedAnswers.value[q.id]);
+  }
+  return textAnswers.value[q.id] || '';
+}
+
+async function submitQuiz() {
+  if (!detail.value?.questions?.length) return;
+  submittingQuiz.value = true;
+  explanation.value = null;
+  try {
+    const answers = Object.fromEntries(detail.value.questions.map((q) => [q.id, answerFor(q)]));
+    quizResult.value = await quizApi.submit(props.course.id, answers);
+    await load();
+  } catch (e) {
+    alert('提交批改失败：' + e.message);
+  } finally {
+    submittingQuiz.value = false;
+  }
+}
+
+async function explainQuestion(q) {
+  explainingQuestionId.value = q.id;
+  try {
+    explanation.value = await quizApi.explain(props.course.id, q.id, answerFor(q));
+  } catch (e) {
+    alert('获取错题讲解失败：' + e.message);
+  } finally {
+    explainingQuestionId.value = null;
   }
 }
 
@@ -478,7 +509,7 @@ onBeforeUnmount(() => {
       </div>
       <div class="user-info">
         <span>{{ user.username }}</span>
-        <span class="badge">{{ user.role === 'teacher' ? '老师' : '学生' }}</span>
+        <span class="badge">学生</span>
       </div>
     </header>
 
@@ -487,8 +518,8 @@ onBeforeUnmount(() => {
       <p v-if="loading" class="muted">加载中...</p>
 
       <template v-if="detail">
-        <!-- 老师端：学习数据看板 -->
-        <template v-if="isTeacher()">
+        <!-- 自习数据仅保留个人学习功能 -->
+        <template v-if="false">
           <p v-if="statsLoading" class="muted">数据加载中...</p>
           <template v-else-if="stats">
             <section class="panel">
@@ -632,7 +663,7 @@ onBeforeUnmount(() => {
           <ul class="file-list" v-if="detail.recordings.length">
             <li v-for="r in detail.recordings" :key="r.id">
               <span>🎤 {{ r.filename }}（{{ formatDuration(r.duration) }}）</span>
-              <audio :src="r.storage" controls></audio>
+              <audio :src="authorizedFileUrl(r.storage)" controls></audio>
               <span class="muted">{{ r.uploader }} · {{ r.created_at }}</span>
               <div v-if="r.transcript" class="transcript-text">{{ r.transcript }}</div>
             </li>
@@ -674,7 +705,7 @@ onBeforeUnmount(() => {
 
           <div class="img-grid" v-if="detail.images.length">
             <div v-for="img in detail.images" :key="img.id" class="img-item">
-              <img :src="img.storage" :alt="img.filename" />
+              <img :src="authorizedFileUrl(img.storage)" :alt="img.filename" />
               <span class="muted">{{ img.uploader }}</span>
             </div>
           </div>
@@ -687,7 +718,7 @@ onBeforeUnmount(() => {
           <div class="msg-input">
             <input
               v-model="newMessage"
-              placeholder="输入留言，与老师和同学交流..."
+              placeholder="输入留言，记录自己的疑问..."
               @keyup.enter="sendMessage"
             />
             <button class="primary" :disabled="sendingMsg" @click="sendMessage">发送</button>
@@ -699,11 +730,7 @@ onBeforeUnmount(() => {
                 <strong>{{ m.username }}</strong>
                 <span class="muted"> {{ m.created_at }}</span>
                 <button class="ghost reply-btn" @click="openReply(m)">回复</button>
-                <button
-                  v-if="m.user_id === user.id || user.role === 'teacher'"
-                  class="danger"
-                  @click="deleteMessage(m)"
-                >删除</button>
+                <button class="danger" @click="deleteMessage(m)">删除</button>
               </p>
               <p class="msg-content">{{ m.content }}</p>
 
@@ -718,11 +745,7 @@ onBeforeUnmount(() => {
                     <strong>{{ r.username }}</strong>
                     <span class="muted"> {{ r.created_at }}</span>
                     <button class="ghost reply-btn" @click="openReply(r)">回复</button>
-                    <button
-                      v-if="r.user_id === user.id || user.role === 'teacher'"
-                      class="danger"
-                      @click="deleteMessage(r)"
-                    >删除</button>
+                    <button class="danger" @click="deleteMessage(r)">删除</button>
                   </p>
                   <p class="msg-content">{{ r.content }}</p>
 
@@ -749,7 +772,7 @@ onBeforeUnmount(() => {
               <button class="ghost" @click="showAnswers = !showAnswers">
                 {{ showAnswers ? '隐藏答案' : '查看答案' }}
               </button>
-              <button v-if="user.role === 'teacher'" class="danger" @click="clearQuestions">清空</button>
+              <button class="danger" @click="clearQuestions">清空</button>
             </div>
           </div>
           <p class="muted">习题基于课程标题、学科及已上传的录音与图片文件名，通过本地规则自动生成。</p>
@@ -771,11 +794,36 @@ onBeforeUnmount(() => {
                   {{ optionLabel(oi) }}. {{ opt }}
                 </button>
               </div>
+              <div v-else class="text-answer">
+                <label :for="`answer-${q.id}`">你的答案</label>
+                <textarea
+                  :id="`answer-${q.id}`"
+                  v-model="textAnswers[q.id]"
+                  :placeholder="q.type === 'essay' ? '请结合课堂笔记作答…' : '请输入答案…'"
+                  :rows="q.type === 'essay' ? 4 : 2"
+                ></textarea>
+              </div>
               <button class="ghost add-wrong" @click="addToWrongBook(q)">加入错题本</button>
+              <button class="ghost explain-btn" @click="explainQuestion(q)" :disabled="explainingQuestionId === q.id">
+                {{ explainingQuestionId === q.id ? '讲解生成中…' : '不会这题？' }}
+              </button>
               <p v-if="showAnswers" class="answer">答案：{{ q.answer }}</p>
             </div>
           </div>
-          <p v-else class="empty-sm">还没有习题，点击「生成习题」基于本课程内容自动出题。</p>
+          <div class="quiz-submit-row" v-if="detail.questions.length">
+            <button class="primary submit-quiz" :disabled="submittingQuiz" @click="submitQuiz">
+              {{ submittingQuiz ? '批改中...' : '提交全部答案并批改' }}
+            </button>
+            <span class="muted">提交后会生成本次得分、逐题反馈和错题讲解入口。</span>
+          </div>
+          <div v-if="quizResult" class="quiz-result">
+            <strong>本次得分：{{ quizResult.score }} / {{ quizResult.maxScore }}</strong>
+            <span>{{ Math.round((quizResult.score / quizResult.maxScore) * 100) }}%</span>
+          </div>
+          <div v-if="explanation" class="explanation-box">
+            <MarkdownView :source="explanation.explanation" />
+          </div>
+          <p v-if="!detail.questions.length" class="empty-sm">还没有习题，点击「生成习题」基于本课程内容自动出题。</p>
         </section>
 
         <!-- ⑤ 错题本区 -->
@@ -810,11 +858,7 @@ onBeforeUnmount(() => {
               <p class="muted">我的答案：{{ w.my_answer || '无' }}</p>
               <p class="answer">正确答案：{{ w.correct_answer || '无' }}</p>
               <p class="muted">{{ w.created_by_name }} · {{ w.created_at }}</p>
-              <button
-                v-if="w.created_by === user.id || user.role === 'teacher'"
-                class="danger"
-                @click="deleteWrong(w)"
-              >删除</button>
+              <button class="danger" @click="deleteWrong(w)">删除</button>
             </div>
           </div>
           <p v-else class="empty-sm">还没有错题，做题时点「加入错题本」或手动添加。</p>
@@ -1048,6 +1092,55 @@ textarea {
   color: #dc2626;
   font-size: 12px;
   padding: 4px 10px;
+}
+
+.text-answer {
+  margin: 10px 0;
+}
+
+.text-answer label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 13px;
+  color: #4b5563;
+}
+
+.explain-btn {
+  margin-left: 8px;
+}
+
+.quiz-submit-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid #e5e7eb;
+}
+
+.submit-quiz {
+  min-height: 40px;
+}
+
+.quiz-result {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  color: #1d4ed8;
+  background: #eff6ff;
+}
+
+.explanation-box {
+  margin-top: 12px;
+  padding: 14px;
+  border-left: 4px solid #2563eb;
+  border-radius: 6px;
+  background: #f8fafc;
 }
 
 .q-list {

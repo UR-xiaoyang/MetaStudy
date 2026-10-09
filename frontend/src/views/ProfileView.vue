@@ -165,7 +165,7 @@ onMounted(() => {
       </div>
       <div class="user-info">
         <span>{{ data?.user?.username || user.username }}</span>
-        <span class="badge">{{ (data?.user?.role || user.role) === 'teacher' ? '老师' : '学生' }}</span>
+        <span class="badge">学生</span>
       </div>
     </header>
 
@@ -174,21 +174,58 @@ onMounted(() => {
       <p v-if="loading" class="muted">加载中...</p>
 
       <template v-if="data">
-        <!-- 我的班级 -->
+        <!-- 我的学习空间 -->
         <section class="panel">
-          <h3>我的班级（{{ data.classes.length }}）</h3>
+          <h3>我的学习空间（{{ data.classes.length }}）</h3>
           <div v-if="data.classes.length" class="card-grid">
             <div v-for="cls in data.classes" :key="cls.id" class="card" @click="emit('open-class', cls)">
               <div class="card-head">
                 <h3>{{ cls.name }}</h3>
                 <button class="enter" @click="emit('open-class', cls)">进入</button>
               </div>
-              <p class="muted">成员 {{ cls.member_count }} 人</p>
-              <p class="muted">邀请码 {{ cls.invite_code }}</p>
-              <p class="muted">我的身份：{{ cls.my_role === 'teacher' ? '老师' : '学生' }}</p>
+              <p class="muted">已创建 {{ cls.course_count || 0 }} 门课程</p>
             </div>
           </div>
-          <p v-else class="empty-sm">还没有加入班级。</p>
+        <p v-if="data.classes.length" class="empty-sm">点击上方返回进入学习空间。</p>
+        </section>
+
+        <!-- 数据概览 -->
+        <section class="panel">
+          <h3>学习数据概览</h3>
+          <div class="overview-grid">
+            <div class="overview-card">
+              <div class="overview-value">{{ data.stats?.total_courses || 0 }}</div>
+              <div class="overview-label">创建课程</div>
+            </div>
+            <div class="overview-card">
+              <div class="overview-value">{{ data.stats?.total_recordings || 0 }}</div>
+              <div class="overview-label">上传录音</div>
+            </div>
+            <div class="overview-card">
+              <div class="overview-value">{{ data.stats?.total_images || 0 }}</div>
+              <div class="overview-label">上传图片</div>
+            </div>
+            <div class="overview-card">
+              <div class="overview-value">{{ data.stats?.total_questions || 0 }}</div>
+              <div class="overview-label">生成习题</div>
+            </div>
+            <div class="overview-card">
+              <div class="overview-value">{{ data.stats?.total_attempts || 0 }}</div>
+              <div class="overview-label">答题次数</div>
+            </div>
+            <div class="overview-card">
+              <div class="overview-value">{{ data.stats?.total_wrongs || 0 }}</div>
+              <div class="overview-label">错题收藏</div>
+            </div>
+            <div class="overview-card">
+              <div class="overview-value">{{ data.stats?.avg_score !== null ? data.stats.avg_score.toFixed(1) + '%' : '-' }}</div>
+              <div class="overview-label">平均分数</div>
+            </div>
+            <div class="overview-card">
+              <div class="overview-value">{{ summary ? secsToHours(summary.seconds) : '0.0' }}</div>
+              <div class="overview-label">学习时长（小时）</div>
+            </div>
+          </div>
         </section>
 
         <!-- 打卡日志（仅学生） -->
@@ -521,4 +558,40 @@ onMounted(() => {
   color: #dc2626;
   margin: 10px 0;
 }
+
+.overview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.overview-card {
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 20px 16px;
+  text-align: center;
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+
+.overview-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+.overview-value {
+  font-size: 32px;
+  font-weight: 700;
+  color: #2563eb;
+  line-height: 1.2;
+  margin-bottom: 8px;
+}
+
+.overview-label {
+  font-size: 13px;
+  color: #6b7280;
+  font-weight: 500;
+}
+
 </style>

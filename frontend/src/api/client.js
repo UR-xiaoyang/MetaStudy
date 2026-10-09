@@ -1,13 +1,24 @@
 const API_BASE = '/api';
 
-function request(path, options = {}) {
+function getAuthHeaders() {
   const token = localStorage.getItem('token');
-  const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
-  if (token) headers.Authorization = `Bearer ${token}`;
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+function handleUnauthorized(status) {
+  if (status === 401) {
+    clearSession();
+    window.dispatchEvent(new CustomEvent('session-expired'));
+  }
+}
+
+function request(path, options = {}) {
+  const headers = { 'Content-Type': 'application/json', ...getAuthHeaders(), ...(options.headers || {}) };
 
   return fetch(`${API_BASE}${path}`, { ...options, headers }).then(async (res) => {
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
+      handleUnauthorized(res.status);
       const err = new Error(data.error || '请求失败');
       err.status = res.status;
       throw err;
@@ -29,7 +40,6 @@ export const classApi = {
 };
 
 function upload(path, file, extra) {
-  const token = localStorage.getItem('token');
   const fd = new FormData();
   fd.append('file', file);
   if (extra) {
@@ -39,12 +49,15 @@ function upload(path, file, extra) {
   }
   return fetch(`${API_BASE}${path}`, {
     method: 'POST',
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    headers: getAuthHeaders(),
     body: fd
   }).then(async (res) => {
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      throw new Error(data.error || '上传失败');
+      handleUnauthorized(res.status);
+      const err = new Error(data.error || '上传失败');
+      err.status = res.status;
+      throw err;
     }
     return data;
   });
@@ -67,6 +80,13 @@ export const questionApi = {
   generate: (courseId) => request(`/questions/generate/${courseId}`, { method: 'POST' }),
   list: (courseId) => request(`/questions/${courseId}`),
   removeAll: (courseId) => request(`/questions/${courseId}`, { method: 'DELETE' })
+};
+
+export const quizApi = {
+  submit: (courseId, answers) => request(`/quiz/${courseId}/submit`, { method: 'POST', body: JSON.stringify({ answers }) }),
+  myAttempts: (courseId) => request(`/quiz/${courseId}/attempts/me`),
+  explain: (courseId, questionId, studentAnswer) =>
+    request(`/quiz/${courseId}/explain/${questionId}`, { method: 'POST', body: JSON.stringify({ student_answer: studentAnswer }) })
 };
 
 export const messageApi = {
@@ -113,6 +133,12 @@ export const studyLogApi = {
 export const profileApi = {
   me: () => request('/profile/me')
 };
+
+export function authorizedFileUrl(path) {
+  const token = localStorage.getItem('token');
+  if (!path || !token) return path || '';
+  return `${path}${path.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}`;
+}
 
 export function saveSession(user, token) {
   localStorage.setItem('user', JSON.stringify(user));

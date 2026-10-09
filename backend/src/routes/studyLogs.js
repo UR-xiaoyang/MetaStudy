@@ -1,26 +1,13 @@
 import { Router } from 'express';
 import { db } from '../db.js';
 import { authMiddleware } from '../auth.js';
+import { ownCourseMiddleware } from '../access.js';
 
 const router = Router();
 router.use(authMiddleware);
 
-function isMember(userId, classId) {
-  return !!db.prepare('SELECT id FROM class_members WHERE class_id = ? AND user_id = ?').get(classId, userId);
-}
-
-function checkCourse(req, res, next) {
-  const course = db.prepare('SELECT * FROM courses WHERE id = ?').get(Number(req.params.courseId));
-  if (!course) return res.status(404).json({ error: '课程不存在' });
-  if (!isMember(req.user.id, course.class_id)) {
-    return res.status(403).json({ error: '无权访问该课程' });
-  }
-  req.course = course;
-  next();
-}
-
 // 上报学习时长（按天累加）
-router.post('/:courseId', checkCourse, (req, res) => {
+router.post('/:courseId', ownCourseMiddleware, (req, res) => {
   const { seconds, log_date } = req.body || {};
   const sec = Math.max(0, Math.floor(Number(seconds) || 0));
   if (sec <= 0) return res.status(400).json({ error: '时长无效' });

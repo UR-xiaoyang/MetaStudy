@@ -5,7 +5,6 @@ import { authApi, saveSession } from '../api/client.js';
 const mode = ref('login');
 const username = ref('');
 const password = ref('');
-const role = ref('student');
 const error = ref('');
 const loading = ref(false);
 
@@ -16,7 +15,7 @@ async function submit() {
     const payload = { username: username.value.trim(), password: password.value };
     const data = mode.value === 'login'
       ? await authApi.login(payload)
-      : await authApi.register({ ...payload, role: role.value });
+      : await authApi.register(payload);
     saveSession(data.user, data.token);
     sessionStorage.setItem('flashLogin', data.user.username);
     window.location.reload();
@@ -47,13 +46,6 @@ async function submit() {
         <div class="input-group">
           <label>密码</label>
           <input v-model="password" type="password" placeholder="请输入密码" autocomplete="current-password" />
-        </div>
-        <div v-if="mode === 'register'" class="input-group">
-          <label>身份</label>
-          <select v-model="role">
-            <option value="student">学生</option>
-            <option value="teacher">老师</option>
-          </select>
         </div>
 
         <p v-if="error" class="error">{{ error }}</p>

@@ -31,6 +31,7 @@ db.exec(`
     name        TEXT NOT NULL,
     invite_code TEXT NOT NULL UNIQUE,
     owner_id    INTEGER NOT NULL,
+    is_personal INTEGER NOT NULL DEFAULT 0,
     created_at  TEXT NOT NULL DEFAULT (datetime('now')),
     FOREIGN KEY (owner_id) REFERENCES users(id)
   );
@@ -94,6 +95,19 @@ db.exec(`
     FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE
   );
 
+  CREATE TABLE IF NOT EXISTS quiz_attempts (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    course_id   INTEGER NOT NULL,
+    user_id     INTEGER NOT NULL,
+    answers     TEXT NOT NULL,
+    result      TEXT NOT NULL,
+    score       INTEGER NOT NULL DEFAULT 0,
+    max_score   INTEGER NOT NULL DEFAULT 0,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+
   CREATE TABLE IF NOT EXISTS messages (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     course_id  INTEGER NOT NULL,
@@ -104,16 +118,6 @@ db.exec(`
     FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
     FOREIGN KEY (parent_id) REFERENCES messages(id) ON DELETE CASCADE
-  );
-
-  CREATE TABLE IF NOT EXISTS teacher_chats (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    class_id   INTEGER NOT NULL,
-    user_id    INTEGER NOT NULL,
-    content    TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    FOREIGN KEY (class_id) REFERENCES classes(id) ON DELETE CASCADE,
-    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
   );
 
   CREATE TABLE IF NOT EXISTS notes (
@@ -168,6 +172,12 @@ db.exec(`
 `);
 
 try {
+  db.exec(`ALTER TABLE classes ADD COLUMN is_personal INTEGER NOT NULL DEFAULT 0`);
+} catch (e) {
+  // 列已存在
+}
+
+try {
   db.exec(`ALTER TABLE recordings ADD COLUMN transcript TEXT`);
 } catch (e) {
   // 列已存在
@@ -185,5 +195,4 @@ try {
   // 列已存在
 }
 
-export const USER_ROLES = ['teacher', 'student'];
 export const QUESTION_TYPES = ['choice', 'fill', 'essay'];
