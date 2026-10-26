@@ -20,34 +20,41 @@ function extractKeywords(...texts) {
   return Array.from(seen);
 }
 
-export function generateNoteForCourse(courseId) {
-  const course = db.prepare('SELECT * FROM courses WHERE id = ?').get(courseId);
-  if (!course) throw new Error('课程不存在');
-
+export function collectCourseContext(courseId) {
   const images = db.prepare('SELECT filename FROM images WHERE course_id = ?').all(courseId);
   const recordings = db.prepare('SELECT filename, transcript FROM recordings WHERE course_id = ?').all(courseId);
   const questions = db.prepare('SELECT question, answer FROM questions WHERE course_id = ?').all(courseId);
-
   const transcripts = recordings.map((r) => r.transcript).filter(Boolean);
+  return { images, recordings, questions, transcripts, transcript: transcripts.join('\n') };
+}
+
+/**
+ * 规则模板笔记：LLM 未配置或调用失败时的降级产物。
+ * 只使用课程标题、转写文本、图片与题目数量，不编造内容。
+ */
+export function buildRuleNote(course, context = null) {
+  const ctx = context || collectCourseContext(course.id);
+  const { images, recordings, questions, transcripts } = ctx;
   const speechText = transcripts.join(' ');
 
-  const keywords = extractKeywords(course.title, course.subject, speechText,
-    ...images.map((i) => i.filename), ...recordings.map((r) => r.filename));
+  const keywords = extractKeywords(
+    course.title,
+    course.subject,
+    speechText,
+    ...images.map((i) => i.filename),
+    ...recordings.map((r) => r.filename)
+  );
   const topKeywords = keywords.slice(0, 6).join('、') || '（待补充）';
 
   const recordingSummary = recordings.length
-    ? `共 ${recordings.length} 段课堂录音` + (speechText ? `，已转写约 ${speechText.replace(/\s+/g, '').length} 字语音内容` : '，尚未转写') + '。'
+    ? `共 ${recordings.length} 段课堂录音` +
+      (speechText ? `，已转写约 ${speechText.replace(/\s+/g, '').length} 字语音内容` : '，尚未转写') +
+      '。'
     : '暂无课堂录音。';
 
   const imageSummary = images.length ? `共 ${images.length} 张课程图片。` : '暂无课程图片。';
 
-  const questionSummary = questions.length
-    ? `已生成 ${questions.length} 道练习题。`
-    : '暂无练习题。';
-
-  const questionList = questions.length
-    ? questions.map((q, i) => `  ${i + 1}. ${q.question}（答案：${q.answer}）`).join('\n')
-    : '';
+  const questionSummary = questions.length ? `已生成 ${questions.length} 道练习题。` : '暂无练习题。';
 
   const transcriptBlock = speechText
     ? `\n### 课堂语音要点（转写摘录）\n${speechText.slice(0, 600)}${speechText.length > 600 ? '……' : ''}`
@@ -75,6 +82,45 @@ export function generateNoteForCourse(courseId) {
 - 回听课堂录音，查漏补缺。
 - 先看笔记，再做题，最后整理错题本反复巩固。
 `;
+}
+
+/**
+ * 生成课程笔记：优先 LLM，失败自动降级到规则模板，并如实返回来源。
+ * @returns {Promise<{content: string, engine: 'llm'|'rule', model: string|null, degraded: boolean, error?: string}>}
+ */
+export async function generateNoteForCourse(courseId, { ai = null, userId = null } = {}) {
+  const course = db.prepare('SELECT * FROM courses WHERE id = ?').get(courseId);
+  if (!course) throw new Error('课程不存在');
+
+  const context = collectCourseContext(courseId);
+
+  if (ai?.configured) {
+    try {
+      const result = await ai.generateNote({
+        course,
+        transcript: context.transcript,
+        images: context.images,
+        questions: context.questions,
+        userId
+      });
+      return {
+        content: result.data.content,
+        engine: 'llm',
+        model: result.model,
+        degraded: false
+      };
+    } catch (error) {
+      return {
+        content: buildRuleNote(course, context),
+        engine: 'rule',
+        model: null,
+        degraded: true,
+        error: error.message
+      };
+    }
+  }
+
+  return { content: buildRuleNote(course, context), engine: 'rule', model: null, degraded: false };
 }
 
 void db;

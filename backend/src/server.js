@@ -15,6 +15,10 @@ import planRoutes from './routes/plans.js';
 import studyLogRoutes from './routes/studyLogs.js';
 import profileRoutes from './routes/profile.js';
 import quizRoutes from './routes/quiz.js';
+import transcribeRoutes from './routes/transcribe.js';
+import aiRoutes from './routes/ai.js';
+import { asrStatus, transcriptionWorker } from './asr/service.js';
+import { aiStatus } from './ai.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -39,6 +43,8 @@ app.use('/api/plans', planRoutes);
 app.use('/api/study-logs', studyLogRoutes);
 app.use('/api/profile', profileRoutes);
 app.use('/api/quiz', quizRoutes);
+app.use('/api/transcribe', transcribeRoutes);
+app.use('/api/ai', aiRoutes);
 
 app.use((err, req, res, next) => {
   if (err?.name === 'MulterError') {
@@ -57,4 +63,19 @@ app.listen(PORT, () => {
   const userCount = db.prepare('SELECT COUNT(*) AS n FROM users').get().n;
   console.log(`[backend] API 服务已启动: http://localhost:${PORT}`);
   console.log(`[backend] 数据库: backend/data/practice.db, 当前用户数: ${userCount}`);
+
+  const asr = asrStatus();
+  if (asr.configured) {
+    transcriptionWorker.start();
+    console.log(`[backend] 音频转写已启用: provider=${asr.provider} model=${asr.model || '-'} language=${asr.language}`);
+  } else {
+    console.warn(`[backend] 音频转写未启用：${asr.reason}`);
+  }
+
+  const llm = aiStatus();
+  if (llm.configured) {
+    console.log(`[backend] LLM 已启用: model=${llm.model} baseUrl=${llm.baseUrl}`);
+  } else {
+    console.warn(`[backend] LLM 未启用：${llm.reason}（AI 功能将使用规则模板并标记为降级）`);
+  }
 });

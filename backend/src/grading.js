@@ -60,3 +60,80 @@ export function explainWrongAnswer({ question, answer, studentAnswer, note, know
     '**巩固建议：**回看上面的课堂依据，用自己的话复述相关知识点后，再完成一道同类型题。'
   ].join('\n');
 }
+
+/**
+ * 简答题 AI 批改：LLM 语义判分（0-100），再按评分点数缩放到本卷分值。
+ * LLM 未配置或调用失败时返回 null，由调用方降级到 gradeAnswer。
+ */
+export async function gradeAnswerWithAi(question, studentAnswer, { ai = null, userId = null } = {}) {
+  if (question?.type !== 'essay' || !ai?.configured) return null;
+
+  const rubric = splitRubric(question);
+  const points = Math.max(rubric.length, 1);
+  const answer = String(studentAnswer ?? '').trim();
+
+  if (!answer) {
+    return {
+      correct: false,
+      score: 0,
+      maxScore: points,
+      feedback: '未作答，本次记 0 分。',
+      strengths: [],
+      weaknesses: ['未作答'],
+      suggestions: ['先写出你记得的概念，再补充解释'],
+      engine: 'llm'
+    };
+  }
+
+  try {
+    const result = await ai.gradeEssay({
+      question: question.question,
+      reference: String(question.answer || ''),
+      studentAnswer: answer,
+      maxScore: 100,
+      userId
+    });
+    const { score, maxScore, feedback, strengths, weaknesses, suggestions } = result.data;
+    const ratio = Math.max(0, Math.min(1, score / maxScore));
+    return {
+      correct: ratio >= 0.99,
+      score: Math.round(ratio * points),
+      maxScore: points,
+      percent: Math.round(ratio * 100),
+      feedback,
+      strengths,
+      weaknesses,
+      suggestions,
+      engine: 'llm',
+      model: result.model
+    };
+  } catch (error) {
+    return null;
+  }
+}
+
+/**
+ * 错题讲解 AI 版本：失败返回 null，由调用方降级到 explainWrongAnswer。
+ */
+export async function explainWrongAnswerWithAi(input, { ai = null, userId = null } = {}) {
+  if (!ai?.configured) return null;
+  try {
+    const result = await ai.explainWrong({
+      question: input.question,
+      answer: input.answer,
+      studentAnswer: input.studentAnswer,
+      note: input.note,
+      knowledgePoints: input.knowledgePoints || [],
+      userId
+    });
+    return {
+      explanation: result.data.explanation,
+      errorType: result.data.errorType,
+      engine: 'llm',
+      model: result.model
+    };
+  } catch (error) {
+    return null;
+  }
+}
+

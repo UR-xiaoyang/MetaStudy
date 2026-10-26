@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { db } from '../db.js';
 import { authMiddleware } from '../auth.js';
 import { ownCourseMiddleware } from '../access.js';
+import { ai } from '../ai.js';
 
 const router = Router();
 router.use(authMiddleware);
@@ -131,24 +132,65 @@ router.put('/state/:courseId', ownCourseMiddleware, (req, res) => {
   res.json(saved);
 });
 
-router.post('/generate/:courseId', ownCourseMiddleware, (req, res) => {
+router.post('/generate/:courseId', ownCourseMiddleware, async (req, res) => {
   try {
-    const plan = buildPlan(req.course);
+    const questions = db.prepare('SELECT question, answer FROM questions WHERE course_id = ?').all(req.course.id);
+    const recordings = db.prepare('SELECT transcript FROM recordings WHERE course_id = ?').all(req.course.id);
+    const transcript = recordings.map((r) => r.transcript).filter(Boolean).join('\n');
+    const attempts = db
+      .prepare(
+        `SELECT score, max_score, created_at FROM quiz_attempts
+          WHERE course_id = ? AND user_id = ? ORDER BY created_at DESC LIMIT 5`
+      )
+      .all(req.course.id, req.user.id);
+    const wrongs = db
+      .prepare(
+        `SELECT content, my_answer, correct_answer FROM wrong_questions
+          WHERE course_id = ? AND created_by = ? ORDER BY created_at DESC LIMIT 10`
+      )
+      .all(req.course.id, req.user.id);
+
+    let plan = null;
+    let engine = 'rule';
+    let degraded = false;
+    let error = null;
+
+    if (ai.configured) {
+      try {
+        const result = await ai.buildPlan({
+          course: req.course,
+          transcript,
+          questions,
+          attempts,
+          wrongs,
+          userId: req.user.id
+        });
+        plan = result.data;
+        engine = 'llm';
+      } catch (e) {
+        degraded = true;
+        error = e.message;
+      }
+    }
+
+    if (!plan) plan = buildPlan(req.course);
+
     const state = emptyState(plan.preview, plan.review, plan.practice);
     db.prepare(
-      `INSERT INTO study_plans (course_id, user_id, preview, review, practice, state, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+      `INSERT INTO study_plans (course_id, user_id, preview, review, practice, state, engine, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
        ON CONFLICT(course_id, user_id) DO UPDATE SET
          preview = excluded.preview,
          review = excluded.review,
          practice = excluded.practice,
          state = excluded.state,
+         engine = excluded.engine,
          updated_at = datetime('now')`
-    ).run(req.course.id, req.user.id, plan.preview, plan.review, plan.practice, state);
+    ).run(req.course.id, req.user.id, plan.preview, plan.review, plan.practice, state, engine);
     const saved = db
       .prepare('SELECT * FROM study_plans WHERE course_id = ? AND user_id = ?')
       .get(req.course.id, req.user.id);
-    res.json(saved);
+    res.json({ ...saved, degraded, degradedReason: error, focus: plan.focus || [] });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

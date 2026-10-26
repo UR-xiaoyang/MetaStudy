@@ -5,6 +5,7 @@ import { authMiddleware } from '../auth.js';
 import { ownCourseMiddleware } from '../access.js';
 import { join, extname } from 'node:path';
 import crypto from 'node:crypto';
+import { AUDIO_MIME_BY_EXT } from '../asr/config.js';
 
 const router = Router();
 router.use(authMiddleware);
@@ -21,8 +22,23 @@ const audioUpload = multer({
   }),
   limits: { fileSize: 200 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
-    const allowed = ['audio/webm', 'audio/mpeg', 'audio/mp4', 'audio/wav', 'audio/ogg'];
-    if (allowed.includes(file.mimetype)) {
+    const allowedMimes = [
+      'audio/webm',
+      'audio/mpeg',
+      'audio/mp3',
+      'audio/mp4',
+      'audio/x-m4a',
+      'audio/wav',
+      'audio/x-wav',
+      'audio/ogg',
+      'audio/aac',
+      'audio/flac',
+      // 浏览器 MediaRecorder 生成的 webm 有时会被标记为 video/webm
+      'video/webm'
+    ];
+    const allowedExts = Object.keys(AUDIO_MIME_BY_EXT);
+    const ext = extname(file.originalname || '').toLowerCase();
+    if (allowedMimes.includes(file.mimetype) || allowedExts.includes(ext)) {
       cb(null, true);
     } else {
       cb(new Error('只允许上传音频文件'));
