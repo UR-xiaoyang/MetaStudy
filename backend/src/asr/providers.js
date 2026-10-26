@@ -176,10 +176,13 @@ export async function transcribeWithCommand({ filePath, config, onProgress = () 
       stderr += text;
       const matches = text.match(/(\d{1,3})\s*%/g);
       if (matches) {
-        const value = Number(matches[matches.length - 1].replace(/\D/g, ''));
-        if (Number.isFinite(value) && value > lastProgress) {
-          lastProgress = Math.min(value, 99);
-          onProgress(lastProgress);
+        // 一次 read 可能包含多行进度，按出现顺序逐个上报（单调递增）
+        for (const match of matches) {
+          const value = Number(match.replace(/\D/g, ''));
+          if (Number.isFinite(value) && value > lastProgress) {
+            lastProgress = Math.min(value, 99);
+            onProgress(lastProgress);
+          }
         }
       }
     });
