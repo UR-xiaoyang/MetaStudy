@@ -77,9 +77,24 @@ export const uploadApi = {
 };
 
 export const questionApi = {
-  generate: (courseId) => request(`/questions/generate/${courseId}`, { method: 'POST' }),
+  generate: (courseId, options = {}) =>
+    request(`/questions/generate/${courseId}`, { method: 'POST', body: JSON.stringify(options) }),
   list: (courseId) => request(`/questions/${courseId}`),
   removeAll: (courseId) => request(`/questions/${courseId}`, { method: 'DELETE' })
+};
+
+export const transcribeApi = {
+  capabilities: () => request('/transcribe/capabilities'),
+  status: (recordingId) => request(`/transcribe/${recordingId}/status`),
+  start: (recordingId) => request(`/transcribe/${recordingId}/start`, { method: 'POST' }),
+  retry: (recordingId) => request(`/transcribe/${recordingId}/retry`, { method: 'POST' }),
+  save: (recordingId, text) =>
+    request(`/transcribe/${recordingId}/result`, { method: 'PUT', body: JSON.stringify({ text }) }),
+  listByCourse: (courseId) => request(`/transcribe/course/${courseId}`)
+};
+
+export const aiApi = {
+  status: () => request('/ai/status')
 };
 
 export const quizApi = {

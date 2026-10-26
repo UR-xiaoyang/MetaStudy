@@ -1,6 +1,6 @@
 <script setup>
 import { ref, onMounted, onBeforeUnmount } from 'vue';
-import { courseApi, uploadApi, questionApi, quizApi, messageApi, noteApi, wrongApi, planApi, studyLogApi, authorizedFileUrl } from '../api/client.js';
+import { courseApi, uploadApi, questionApi, quizApi, messageApi, noteApi, wrongApi, planApi, studyLogApi, transcribeApi, aiApi, authorizedFileUrl } from '../api/client.js';
 import MarkdownView from '../components/MarkdownView.vue';
 import StudyPlanView from '../components/StudyPlanView.vue';
 
@@ -51,10 +51,17 @@ async function stopStudy() {
   return false;
 }
 
-async function load() {
-  loading.value = true;
+async function load({ silent = false } = {}) {
+  if (!silent) loading.value = true;
   try {
     detail.value = await courseApi.detail(props.course.id);
+    syncTranscriptState(detail.value.recordings);
+    if (!asrCapability.value) {
+      asrCapability.value = await transcribeApi.capabilities().catch(() => ({ configured: false, reason: '无法获取转写服务状态' }));
+    }
+    if (!aiStatus.value) {
+      aiStatus.value = await aiApi.status().catch(() => ({ configured: false, reason: '无法获取 AI 服务状态' }));
+    }
     if (isTeacher()) {
       statsLoading.value = true;
       try {
@@ -75,7 +82,7 @@ async function load() {
   } catch (e) {
     error.value = e.message;
   } finally {
-    loading.value = false;
+    if (!silent) loading.value = false;
   }
 }
 
@@ -245,6 +252,158 @@ function stopTranscribe() {
   liveRecording.value = false;
 }
 
+// ---------- 离线音频转写（v1.1）----------
+const audioFile = ref(null);
+const uploadingAudio = ref(false);
+const asrCapability = ref(null);
+const aiStatus = ref(null);
+const transcribeState = ref({});
+const transcriptDrafts = ref({});
+const editingTranscript = ref({});
+const transcribeBusy = ref({});
+let transcribePollTimer = null;
+
+const TRANSCRIPT_LABELS = {
+  none: '未转写',
+  pending: '排队中',
+  processing: '转写中',
+  completed: '已转写',
+  failed: '转写失败'
+};
+
+function transcriptOf(r) {
+  return (
+    transcribeState.value[r.id] || {
+      status: r.transcript_status || (r.transcript ? 'completed' : 'none'),
+      progress: r.transcript_progress || (r.transcript ? 100 : 0),
+      transcript: r.transcript || '',
+      error: r.transcript_error || null,
+      source: r.transcript_source || null
+    }
+  );
+}
+
+function mergeTranscribe(id, payload) {
+  transcribeState.value = {
+    ...transcribeState.value,
+    [id]: { ...(transcribeState.value[id] || {}), ...payload }
+  };
+  if (payload.transcript != null && !editingTranscript.value[id]) {
+    transcriptDrafts.value[id] = payload.transcript;
+  }
+}
+
+function syncTranscriptState(recordings) {
+  for (const r of recordings || []) {
+    const current = transcribeState.value[r.id];
+    const next = {
+      status: r.transcript_status || (r.transcript ? 'completed' : 'none'),
+      progress: r.transcript_progress ?? (r.transcript ? 100 : 0),
+      transcript: r.transcript || '',
+      error: r.transcript_error || null,
+      source: r.transcript_source || null
+    };
+    transcribeState.value = { ...transcribeState.value, [r.id]: { ...(current || {}), ...next } };
+    if (!editingTranscript.value[r.id]) {
+      transcriptDrafts.value[r.id] = r.transcript || '';
+    }
+  }
+}
+
+function isTranscribing(r) {
+  const status = transcriptOf(r).status;
+  return status === 'pending' || status === 'processing';
+}
+
+function transcriptLabel(r) {
+  return TRANSCRIPT_LABELS[transcriptOf(r).status] || '未转写';
+}
+
+function ensureTranscribePolling() {
+  if (transcribePollTimer) return;
+  transcribePollTimer = setInterval(async () => {
+    const active = (detail.value?.recordings || []).filter((r) => isTranscribing(r));
+    if (!active.length) {
+      clearInterval(transcribePollTimer);
+      transcribePollTimer = null;
+      return;
+    }
+    for (const r of active) {
+      try {
+        const payload = await transcribeApi.status(r.id);
+        mergeTranscribe(r.id, payload);
+        if (payload.status === 'completed') {
+          await load({ silent: true });
+          emit('updated');
+        }
+      } catch {
+        // 轮询失败不打断用户操作，下一轮再试
+      }
+    }
+  }, 2000);
+}
+
+async function startOrRetryTranscription(r) {
+  if (!asrCapability.value?.configured) {
+    alert(asrCapability.value?.reason || '转写服务未配置');
+    return;
+  }
+  transcribeBusy.value = { ...transcribeBusy.value, [r.id]: true };
+  try {
+    const status = transcriptOf(r).status;
+    const payload = status === 'failed' ? await transcribeApi.retry(r.id) : await transcribeApi.start(r.id);
+    mergeTranscribe(r.id, payload);
+    ensureTranscribePolling();
+  } catch (e) {
+    alert(`启动转写失败：${e.message}`);
+  } finally {
+    transcribeBusy.value = { ...transcribeBusy.value, [r.id]: false };
+  }
+}
+
+async function saveTranscript(r) {
+  const text = (transcriptDrafts.value[r.id] || '').trim();
+  if (!text) {
+    alert('转写内容不能为空');
+    return;
+  }
+  transcribeBusy.value = { ...transcribeBusy.value, [r.id]: true };
+  try {
+    const payload = await transcribeApi.save(r.id, text);
+    editingTranscript.value = { ...editingTranscript.value, [r.id]: false };
+    mergeTranscribe(r.id, payload);
+    await load({ silent: true });
+  } catch (e) {
+    alert(`保存转写失败：${e.message}`);
+  } finally {
+    transcribeBusy.value = { ...transcribeBusy.value, [r.id]: false };
+  }
+}
+
+function onAudioChange(e) {
+  audioFile.value = e.target.files?.[0] || null;
+}
+
+async function uploadAudio() {
+  if (!audioFile.value) return;
+  uploadingAudio.value = true;
+  try {
+    const created = await uploadApi.audio(props.course.id, audioFile.value, null);
+    audioFile.value = null;
+    await load({ silent: true });
+    if (asrCapability.value?.configured && created?.id) {
+      const payload = await transcribeApi.start(created.id);
+      mergeTranscribe(created.id, payload);
+      ensureTranscribePolling();
+    }
+    emit('updated');
+  } catch (e) {
+    alert(`上传音频失败：${e.message}`);
+  } finally {
+    uploadingAudio.value = false;
+  }
+}
+
 // ---------- 图片上传 ----------
 const imageFile = ref(null);
 const uploading = ref(false);
@@ -272,11 +431,13 @@ async function uploadImage() {
 const generatingNote = ref(false);
 const editingNote = ref(false);
 const noteDraft = ref('');
+const noteInfo = ref(null);
 
 async function generateNote() {
   generatingNote.value = true;
   try {
-    await noteApi.generate(props.course.id);
+    const result = await noteApi.generate(props.course.id);
+    noteInfo.value = { engine: result.engine, degraded: result.degraded, reason: result.degradedReason || null };
     await load();
     emit('updated');
     editingNote.value = false;
@@ -312,12 +473,22 @@ const submittingQuiz = ref(false);
 const quizResult = ref(null);
 const explanation = ref(null);
 const explainingQuestionId = ref(null);
+const questionDifficulty = ref('basic');
+const questionCount = ref(5);
+const generationInfo = ref(null);
+const DIFFICULTY_LABELS = { basic: '基础', medium: '中级', advanced: '高级' };
 
 async function generate() {
   generating.value = true;
+  generationInfo.value = null;
   try {
-    await questionApi.generate(props.course.id);
-    await load();
+    const result = await questionApi.generate(props.course.id, {
+      difficulty: questionDifficulty.value,
+      count: questionCount.value,
+      replace: true
+    });
+    generationInfo.value = { engine: result.engine, degraded: result.degraded, error: result.error || null };
+    await load({ silent: true });
     emit('updated');
     showAnswers.value = false;
   } catch (e) {
@@ -475,6 +646,10 @@ async function deleteWrong(w) {
   }
 }
 
+function questionById(id) {
+  return (detail.value?.questions || []).find((q) => q.id === id) || null;
+}
+
 function typeLabel(t) {
   return { choice: '单选题', fill: '填空题', essay: '简答题' }[t] || t;
 }
@@ -497,6 +672,7 @@ onBeforeUnmount(() => {
   stopTimer();
   stopTranscribe();
   if (studyTimer) clearInterval(studyTimer);
+  if (transcribePollTimer) clearInterval(transcribePollTimer);
 });
 </script>
 
@@ -655,17 +831,70 @@ onBeforeUnmount(() => {
             <span v-if="recording" class="rec-timer">{{ formatDuration(recordingTime) }}</span>
           </div>
 
+          <div class="upload-row">
+            <input type="file" accept=".mp3,.m4a,.wav,.webm,.ogg,audio/*" @change="onAudioChange" />
+            <button class="primary" :disabled="!audioFile || uploadingAudio" @click="uploadAudio">
+              {{ uploadingAudio ? '上传中...' : '上传已有音频' }}
+            </button>
+            <span class="muted">支持 mp3 / m4a / wav / webm</span>
+          </div>
+
           <div v-if="transcribing" class="transcript-box">
             <p class="muted">正在实时语音识别（中文）...</p>
             <p v-if="liveTranscript" class="transcript-text">{{ liveTranscript }}</p>
           </div>
 
+          <p v-if="asrCapability && !asrCapability.configured" class="hint">
+            离线转写未启用：{{ asrCapability.reason }}。在 backend/.env 配置 ASR_PROVIDER 后可上传音频自动转写。
+          </p>
           <ul class="file-list" v-if="detail.recordings.length">
             <li v-for="r in detail.recordings" :key="r.id">
               <span>🎤 {{ r.filename }}（{{ formatDuration(r.duration) }}）</span>
               <audio :src="authorizedFileUrl(r.storage)" controls></audio>
               <span class="muted">{{ r.uploader }} · {{ r.created_at }}</span>
-              <div v-if="r.transcript" class="transcript-text">{{ r.transcript }}</div>
+              <div class="rec-actions">
+                <span class="tr-badge" :class="`tr-${transcriptOf(r).status}`">{{ transcriptLabel(r) }}</span>
+                <button
+                  class="ghost"
+                  :disabled="transcribeBusy[r.id] || isTranscribing(r) || !asrCapability || !asrCapability.configured"
+                  @click="startOrRetryTranscription(r)"
+                >
+                  {{
+                    isTranscribing(r)
+                      ? '转写中…'
+                      : transcriptOf(r).status === 'failed'
+                        ? '重试转写'
+                        : transcriptOf(r).status === 'completed'
+                          ? '重新转写'
+                          : '转写音频'
+                  }}
+                </button>
+              </div>
+              <div v-if="isTranscribing(r)" class="tr-progress">
+                <div class="tr-progress-bar" :style="{ width: `${transcriptOf(r).progress}%` }"></div>
+                <span class="muted">{{ transcriptOf(r).progress }}% · {{ transcriptLabel(r) }}</span>
+              </div>
+              <p v-if="transcriptOf(r).status === 'failed'" class="tr-error">转写失败：{{ transcriptOf(r).error }}</p>
+
+              <div v-if="transcriptOf(r).transcript" class="transcript-box">
+                <div class="note-head">
+                  <strong>转写文本</strong>
+                  <span class="muted" v-if="transcriptOf(r).source">
+                    来源：{{ transcriptOf(r).source === 'manual' ? '人工校对' : transcriptOf(r).source === 'browser' ? '浏览器实时识别' : transcriptOf(r).source }}
+                  </span>
+                  <button
+                    class="ghost"
+                    @click="editingTranscript = { ...editingTranscript, [r.id]: !editingTranscript[r.id] }"
+                  >
+                    {{ editingTranscript[r.id] ? '取消编辑' : '编辑' }}
+                  </button>
+                </div>
+                <textarea v-if="editingTranscript[r.id]" v-model="transcriptDrafts[r.id]" rows="6"></textarea>
+                <p v-else class="transcript-text">{{ transcriptOf(r).transcript }}</p>
+                <div v-if="editingTranscript[r.id]" class="actions">
+                  <button class="primary" :disabled="transcribeBusy[r.id]" @click="saveTranscript(r)">保存转写</button>
+                </div>
+              </div>
             </li>
           </ul>
           <p v-else class="empty-sm">还没有录音，点击「开始录音」录制课堂内容。</p>
@@ -690,7 +919,10 @@ onBeforeUnmount(() => {
           <div v-if="detail.note" class="note-box">
             <div class="note-head">
               <strong>笔记</strong>
-              <span class="muted" v-if="detail.note.auto_generated">（自动生成）</span>
+              <span class="muted" v-if="detail.note.auto_generated">
+                （{{ detail.note.engine === 'llm' ? `AI 生成${detail.note.model ? ' · ' + detail.note.model : ''}` : '规则模板生成' }}）
+              </span>
+              <span v-if="noteInfo && noteInfo.degraded" class="hint warn">AI 生成失败，已降级：{{ noteInfo.reason }}</span>
               <button class="ghost" @click="startEditNote">编辑</button>
             </div>
             <MarkdownView v-if="!editingNote" :source="detail.note.content" />
@@ -775,12 +1007,31 @@ onBeforeUnmount(() => {
               <button class="danger" @click="clearQuestions">清空</button>
             </div>
           </div>
-          <p class="muted">习题基于课程标题、学科及已上传的录音与图片文件名，通过本地规则自动生成。</p>
+          <div class="q-controls">
+            <label class="muted">难度
+              <select v-model="questionDifficulty" :disabled="generating">
+                <option value="basic">基础</option>
+                <option value="medium">中级</option>
+                <option value="advanced">高级</option>
+              </select>
+            </label>
+            <label class="muted">题量
+              <input type="number" min="1" max="10" v-model.number="questionCount" :disabled="generating" />
+            </label>
+            <span class="muted">
+              {{ aiStatus && aiStatus.configured ? `AI 出题模型：${aiStatus.model}` : '未配置 LLM，当前使用规则模板出题' }}
+            </span>
+          </div>
+          <p v-if="generationInfo && generationInfo.degraded" class="hint warn">
+            AI 生成失败，已降级为规则模板：{{ generationInfo.error }}
+          </p>
+          <p class="muted">习题优先基于课堂转写内容与笔记生成，重新生成会替换现有题目。</p>
 
           <div class="q-list" v-if="detail.questions.length">
             <div v-for="(q, i) in detail.questions" :key="q.id" class="q-item">
               <p class="q-title">
-                <span class="tag">{{ typeLabel(q.type) }}</span>
+                <span class="tag">{{ typeLabel(q.type) }} · {{ DIFFICULTY_LABELS[q.difficulty] || '基础' }}</span>
+                <span v-if="q.engine" class="engine-badge" :class="q.engine">{{ q.engine === 'llm' ? 'AI' : '规则' }}</span>
                 {{ i + 1 }}. {{ q.question }}
               </p>
               <div v-if="q.type === 'choice' && q.options" class="options">
@@ -819,6 +1070,21 @@ onBeforeUnmount(() => {
           <div v-if="quizResult" class="quiz-result">
             <strong>本次得分：{{ quizResult.score }} / {{ quizResult.maxScore }}</strong>
             <span>{{ Math.round((quizResult.score / quizResult.maxScore) * 100) }}%</span>
+            <span v-if="quizResult.engine" class="engine-badge" :class="quizResult.engine">
+              {{ quizResult.engine === 'llm' ? 'AI 批改' : quizResult.engine === 'mixed' ? 'AI + 规则批改' : '规则批改' }}
+            </span>
+            <ul class="feedback-list">
+              <li v-for="item in quizResult.results" :key="item.questionId">
+                <p class="feedback-head">
+                  <span :class="['mark', item.correct ? 'ok' : 'bad']">{{ item.correct ? '✓' : '✗' }}</span>
+                  {{ questionById(item.questionId)?.question || `题目 ${item.questionId}` }}
+                  <span class="muted">（{{ item.score }}/{{ item.maxScore }}）</span>
+                </p>
+                <p class="feedback-text">{{ item.feedback }}</p>
+                <p v-if="item.weaknesses && item.weaknesses.length" class="muted">不足：{{ item.weaknesses.join('；') }}</p>
+                <p v-if="item.suggestions && item.suggestions.length" class="muted">建议：{{ item.suggestions.join('；') }}</p>
+              </li>
+            </ul>
           </div>
           <div v-if="explanation" class="explanation-box">
             <MarkdownView :source="explanation.explanation" />
@@ -1349,5 +1615,155 @@ textarea {
 .empty-sm {
   color: #9ca3af;
   font-size: 13px;
+}
+/* v1.1 离线转写 */
+.hint {
+  font-size: 13px;
+  color: #92400e;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin: 6px 0 10px;
+}
+
+.hint.warn {
+  color: #991b1b;
+  background: #fef2f2;
+  border-color: #fecaca;
+}
+
+.rec-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0;
+}
+
+.tr-badge {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #e5e7eb;
+  color: #374151;
+}
+
+.tr-badge.tr-pending,
+.tr-badge.tr-processing {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.tr-badge.tr-completed {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.tr-badge.tr-failed {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.tr-progress {
+  position: relative;
+  height: 18px;
+  background: #f3f4f6;
+  border-radius: 999px;
+  overflow: hidden;
+  margin: 8px 0;
+  display: flex;
+  align-items: center;
+}
+
+.tr-progress-bar {
+  height: 100%;
+  background: linear-gradient(90deg, #60a5fa, #2563eb);
+  transition: width 0.3s ease;
+}
+
+.tr-progress span {
+  position: absolute;
+  left: 10px;
+  font-size: 12px;
+  color: #1f2937;
+}
+
+.tr-error {
+  color: #b91c1c;
+  font-size: 13px;
+  margin: 6px 0;
+}
+
+/* v1.2 AI 增强 */
+.q-controls {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin: 10px 0 6px;
+}
+
+.q-controls select,
+.q-controls input {
+  margin-left: 6px;
+  padding: 4px 8px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.q-controls input {
+  width: 64px;
+}
+
+.engine-badge {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #ede9fe;
+  color: #6d28d9;
+  margin-left: 6px;
+}
+
+.engine-badge.rule {
+  background: #f3f4f6;
+  color: #4b5563;
+}
+
+.engine-badge.mixed {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.feedback-list {
+  list-style: none;
+  margin-top: 10px;
+  border-top: 1px solid #e5e7eb;
+}
+
+.feedback-list li {
+  padding: 10px 0;
+  border-bottom: 1px solid #f3f4f6;
+}
+
+.feedback-head {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.feedback-text {
+  font-size: 13px;
+  color: #374151;
+  margin-top: 4px;
+}
+
+.mark.ok {
+  color: #15803d;
+  font-weight: 700;
+}
+
+.mark.bad {
+  color: #b91c1c;
+  font-weight: 700;
 }
 </style>
